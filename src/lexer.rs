@@ -63,6 +63,7 @@ pub enum SeparatorKind {
     BracketOpen,
     BracketClose,
     Comma,
+    Semicolon,
 }
 impl SeparatorKind {
     pub fn from_char(ch: char) -> Option<Self> {
@@ -72,6 +73,7 @@ impl SeparatorKind {
             '{' => Some(SeparatorKind::BlockOpen),
             '}' => Some(SeparatorKind::BlockClose),
             ',' => Some(SeparatorKind::Comma),
+            ';' => Some(SeparatorKind::Semicolon),
             _ => None,
         }
     }
@@ -83,6 +85,7 @@ impl SeparatorKind {
             SeparatorKind::BracketOpen => '(',
             SeparatorKind::BracketClose => ')',
             SeparatorKind::Comma => ',',
+            SeparatorKind::Semicolon => ';',
         }
     }
 }
@@ -166,6 +169,10 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    pub fn get_tokens(self) -> Vec<Token<'a>> {
+        self.tokens
+    }
+
     /// Advance primary iterator and return the character. Adjusts column and row values.
     /// If string is over returns None
     fn next_char(&mut self) -> Option<char> {
@@ -207,7 +214,7 @@ impl<'a> Lexer<'a> {
     /// Advance code iterator by given amount or until the end of string
     fn advance_by(&mut self, amount: usize) {
         let mut i: usize = 0;
-        while i < amount && self.chars_indices.next().is_some() {
+        while i < amount && self.next_char().is_some() {
             i += 1
         }
     }
@@ -228,10 +235,7 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn tokenize_id(&mut self) -> Option<Token<'a>> {
-        if !self
-            .peek_char()
-            .is_some_and(|ch| ch.is_alphabetic() || ch == '_')
-        {
+        if !self.peek_char().is_some_and(char::is_alphabetic) {
             return None;
         }
 
@@ -271,9 +275,10 @@ impl<'a> Lexer<'a> {
             {
                 it.next();
                 const_str.push(spec);
-                offset += 1;
+                offset += 2;
             } else {
                 const_str.push(ch);
+                offset += 1;
             }
         }
         if it.peek().is_none_or(|(_, c)| *c != '"') {
@@ -297,18 +302,33 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn tokenize_operator(&mut self) -> Option<Token<'a>> {
+        if let Some(ch) = self.peek_char().clone()
+            && let Some(op) = OperatorKind::from_char(ch)
+        {
+            let tok = Token::new(TokenKind::Operator(op), self.row, self.column);
+            self.next_char();
+            Some(tok)
+        } else {
+            None
+        }
+    }
+
     pub fn tokenize(&mut self) -> Result<(), ParsingError> {
-        self.skip_char_while(char::is_whitespace);
-        let token = self
-            .tokenize_separator()
-            .or_else(|| self.tokenize_id())
-            .or_else(|| self.tokenize_string())
-            .ok_or(ParsingError::new(
-                ParsingErrorKind::UnknownCharacter,
-                self.row,
-                self.column,
-            ))?;
-        self.tokens.push(token);
+        while self.peek_char().is_some() {
+            self.skip_char_while(char::is_whitespace);
+            let token = self
+                .tokenize_separator()
+                .or_else(|| self.tokenize_operator())
+                .or_else(|| self.tokenize_id())
+                .or_else(|| self.tokenize_string())
+                .ok_or(ParsingError::new(
+                    ParsingErrorKind::UnknownCharacter,
+                    self.row,
+                    self.column,
+                ))?;
+            self.tokens.push(token);
+        }
         Ok(())
     }
 
@@ -326,6 +346,8 @@ impl<'a> Lexer<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use crate::lexer::{Lexer, SeparatorKind, TokenKind};
 
     #[test]
@@ -429,5 +451,23 @@ mod tests {
         let mut lexer = Lexer::new(code);
         let res = lexer.tokenize_string();
         assert!(res.is_none());
+    }
+
+    #[test]
+    fn test_tags() {
+        let code = "p(){}";
+        let mut lexer = Lexer::new(code);
+        let res = lexer.tokenize();
+        assert_eq!(lexer.get_tokens().len(), 5);
+    }
+
+    #[test]
+    fn test_tags_with_arg() -> Result<(), Box<dyn Error>> {
+        let code = "p(c = \"1\"){}";
+        let mut lexer = Lexer::new(code);
+        lexer.tokenize()?;
+        let res = lexer.get_tokens();
+        assert_eq!(res.len(), 8);
+        Ok(())
     }
 }

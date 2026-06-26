@@ -1,11 +1,6 @@
 use std::collections::HashMap;
 
-pub struct State {}
-
-pub struct Function {
-    tag_name: String,
-    arguments: HashMap<String, String>,
-}
+use crate::state::State;
 
 pub enum ActionKind<'a> {
     /// Final unit of code that represents a constant string
@@ -34,30 +29,86 @@ impl<'a> ActionKind<'a> {
                 arguments,
                 body,
             } => {
-                let mut result = format!("<{tag_name} >");
+                let mut result = format!("<{tag_name} ");
                 for (arg, val) in arguments {
                     result += &format!("{arg}=\"{}\"", val.generate(state));
                 }
+                result += ">";
                 if let Some(body) = body {
                     result += &body.generate(state);
                 }
-                format!("</{result}>")
+                format!("{result}</{tag_name}>")
             }
             ActionKind::FunctionSequence {
                 tag_name,
                 arguments,
                 body,
             } => {
-                let mut result = format!("<{tag_name} >");
+                let mut result = format!("<{tag_name} ");
                 for (arg, val) in arguments {
                     result += &format!("{arg}=\"{}\"", val.generate(state));
                 }
+                result += ">";
                 for seq in body {
                     result += &seq.generate(state);
                 }
-                format!("</{result}>")
+                format!("{result}</{tag_name}>")
             }
             _ => todo!(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::execution::ActionKind;
+    use crate::state::State;
+
+    #[test]
+    fn test_string_generation() {
+        let act = ActionKind::ConstString("hello world".to_owned());
+        let mut state: State = State::default();
+        assert_eq!(act.generate(&mut state), "hello world".to_owned());
+    }
+
+    #[test]
+    fn test_tag_generation() {
+        let act = ActionKind::Function {
+            tag_name: "div",
+            arguments: HashMap::new(),
+            body: None,
+        };
+        let mut state: State = State::default();
+        assert_eq!(act.generate(&mut state), "<div ></div>".to_owned());
+    }
+
+    #[test]
+    fn test_tag_generation_with_arguments() {
+        let mut args: HashMap<&str, ActionKind> = HashMap::new();
+        args.insert("class", ActionKind::ConstString("amazing".to_owned()));
+        let act = ActionKind::Function {
+            tag_name: "div",
+            arguments: args,
+            body: None,
+        };
+
+        let mut state: State = State::default();
+        assert_eq!(
+            act.generate(&mut state),
+            "<div class=\"amazing\"></div>".to_owned()
+        );
+    }
+
+    #[test]
+    fn test_tag_generation_body_p() {
+        let act = ActionKind::FunctionSequence {
+            tag_name: "p",
+            arguments: HashMap::new(),
+            body: vec![ActionKind::ConstString("hello world".to_owned())],
+        };
+        let mut state: State = State::default();
+        assert_eq!(act.generate(&mut state), "<p >hello world</p>".to_owned());
     }
 }

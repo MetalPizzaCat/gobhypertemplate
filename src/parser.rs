@@ -102,7 +102,7 @@ impl<'a> Parser<'a> {
         if let Some(tok) = self.tokens.peek() {
             tok.get_row()
         } else {
-            self.last_column
+            self.last_row
         }
     }
 
@@ -139,7 +139,9 @@ impl<'a> Parser<'a> {
                         return Ok(());
                     }
                 }
-                _ => {}
+                _ => {
+                    println!("{:?}", tok.get_kind());
+                }
             }
         }
         Err(ParsingError::new_with_message(
@@ -154,15 +156,16 @@ impl<'a> Parser<'a> {
     /// Unit represents the smallest expression possible, such as function call or constant string
     pub fn parse_unit(&mut self) -> Result<Option<ActionKind<'a>>, ParsingError> {
         if let Some(tok) = self.tokens.peek() {
-            let act = match tok.get_kind() {
-                TokenKind::Identifier(_) => self.parse_call()?,
-                TokenKind::Variable(name) => ActionKind::GetVariable(name),
-                TokenKind::StringConst(s) => ActionKind::ConstString(s),
-                TokenKind::Separator(separator_kind) => todo!(),
-                TokenKind::Operator(operator_kind) => todo!(),
+            let act: Option<ActionKind<'_>> = match tok.get_kind() {
+                // any identifier will be considered a function call
+                // this way any operation like variable operations could be done as separate functions
+                TokenKind::Identifier(_) => Some(self.parse_call()?),
+                TokenKind::Variable(name) => Some(ActionKind::GetVariable(name)),
+                TokenKind::StringConst(s) => Some(ActionKind::ConstString(s)),
+                _ => None,
             };
             self.next();
-            return Ok(Some(act));
+            return Ok(act);
         } else {
             return Err(ParsingError::new_with_message(
                 crate::lexer::ParsingErrorKind::UnexpectedCharacter,
@@ -171,12 +174,11 @@ impl<'a> Parser<'a> {
                 self.get_column(),
             ));
         }
-        if is_current_of_kind!(self, TokenKind::StringConst(_)) {}
-        Ok(None)
     }
 
     pub fn parse_argument(&mut self) -> Result<Option<(&'a str, ActionKind<'a>)>, ParsingError> {
         if let Some(arg_name) = self.try_get_as_token_id() {
+            self.next();
             self.consume_operator(OperatorKind::Assign)?;
             return Ok(Some((arg_name, self.parse_unit()?.unwrap())));
         }
@@ -185,21 +187,40 @@ impl<'a> Parser<'a> {
 
     pub fn parse_call(&mut self) -> Result<ActionKind<'a>, ParsingError> {
         let id = self.get_current_as_id("Expected function name")?;
+        self.next();
         self.consume_separator(SeparatorKind::BracketOpen)?;
         let mut arguments: HashMap<&'a str, ActionKind<'a>> = HashMap::new();
         while let Some((arg, act)) = self.parse_argument()? {
             arguments.insert(arg, act);
+            if !is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::Comma)) {
+                break;
+            }
         }
-        while let Some(tok) = self.tokens.peek() {}
         self.consume_separator(SeparatorKind::BracketClose)?;
 
+        let mut body: Vec<ActionKind> = Vec::new();
         self.consume_separator(SeparatorKind::BlockOpen)?;
+        loop {
+            if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose)) {
+                break;
+            } else if let Some(act) = self.parse_unit()? {
+                self.consume_separator(SeparatorKind::Semicolon)?;
+                body.push(act);
+            }
+        }
+        // while let Some(act) = self.parse_unit()? {
+        //     self.consume_separator(SeparatorKind::Semicolon)?;
+        //     body.push(act);
+        //     if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose)) {
+        //         break;
+        //     }
+        // }
         self.consume_separator(SeparatorKind::BlockClose)?;
 
-        Ok(ActionKind::Function {
+        Ok(ActionKind::FunctionSequence {
             tag_name: id,
             arguments: arguments,
-            body: None,
+            body: body,
         })
     }
 }
@@ -210,7 +231,7 @@ mod tests {
 
     use crate::{
         execution::ActionKind,
-        lexer::{Token, TokenKind},
+        lexer::{OperatorKind, SeparatorKind, Token, TokenKind},
         parser::Parser,
     };
 
@@ -228,6 +249,63 @@ mod tests {
 
         match res.unwrap() {
             ActionKind::ConstString(_) => return Ok(()),
+            _ => panic!("Wrong value"),
+        }
+    }
+
+    #[test]
+    fn parse_empty_call() -> Result<(), Box<dyn Error>> {
+        let tokens = vec![
+            Token::new(TokenKind::Identifier("Body"), 0, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BracketOpen), 1, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BracketClose), 2, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BlockOpen), 3, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BlockClose), 4, 0),
+        ];
+
+        let mut parser = Parser::new(&tokens);
+
+        let res = parser.parse_call()?;
+
+        match res {
+            ActionKind::FunctionSequence {
+                tag_name,
+                arguments,
+                body,
+            } => return Ok(()),
+            _ => panic!("Wrong value"),
+        }
+    }
+
+    #[test]
+    fn parse_empty_with_one_argument() -> Result<(), Box<dyn Error>> {
+        let tokens = vec![
+            Token::new(TokenKind::Identifier("Body"), 0, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BracketOpen), 1, 0),
+            Token::new(TokenKind::Identifier("arg1"), 0, 0),
+            Token::new(TokenKind::Operator(OperatorKind::Assign), 0, 0),
+            Token::new(TokenKind::StringConst("hello world".to_string()), 0, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BracketClose), 2, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BlockOpen), 3, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BlockClose), 4, 0),
+        ];
+
+        let mut parser = Parser::new(&tokens);
+
+        let res = parser.parse_call()?;
+
+        match res {
+            ActionKind::FunctionSequence {
+                tag_name,
+                arguments,
+                body,
+            } => {
+                assert!(matches!(
+                    arguments.get("arg1").unwrap(),
+                    ActionKind::ConstString(_)
+                ));
+                return Ok(());
+            }
             _ => panic!("Wrong value"),
         }
     }
