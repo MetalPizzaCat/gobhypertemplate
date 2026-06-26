@@ -164,7 +164,9 @@ impl<'a> Parser<'a> {
                 TokenKind::StringConst(s) => Some(ActionKind::ConstString(s)),
                 _ => None,
             };
-            self.next();
+            if act.is_some() {
+                self.next();
+            }
             return Ok(act);
         } else {
             return Err(ParsingError::new_with_message(
@@ -201,11 +203,11 @@ impl<'a> Parser<'a> {
         let mut body: Vec<ActionKind> = Vec::new();
         self.consume_separator(SeparatorKind::BlockOpen)?;
         loop {
-            if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose)) {
-                break;
-            } else if let Some(act) = self.parse_unit()? {
+            if let Some(act) = self.parse_unit()? {
                 self.consume_separator(SeparatorKind::Semicolon)?;
                 body.push(act);
+            } else if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose)) {
+                break;
             }
         }
         // while let Some(act) = self.parse_unit()? {
@@ -273,6 +275,35 @@ mod tests {
                 arguments,
                 body,
             } => return Ok(()),
+            _ => panic!("Wrong value"),
+        }
+    }
+
+    #[test]
+    fn parse_empty_call_with_one_statement() -> Result<(), Box<dyn Error>> {
+        let tokens = vec![
+            Token::new(TokenKind::Identifier("Body"), 0, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BracketOpen), 1, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BracketClose), 2, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BlockOpen), 3, 0),
+            Token::new(TokenKind::StringConst("hello world".to_string()), 0, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::Semicolon), 3, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BlockClose), 4, 0),
+        ];
+
+        let mut parser = Parser::new(&tokens);
+
+        let res = parser.parse_call()?;
+
+        match res {
+            ActionKind::FunctionSequence {
+                tag_name,
+                arguments,
+                body,
+            } => {
+                assert_eq!(body.len(), 1);
+                return Ok(());
+            }
             _ => panic!("Wrong value"),
         }
     }
