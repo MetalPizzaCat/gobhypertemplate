@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
-use crate::state::State;
+use crate::{lexer::OperatorKind, state::State};
 
+#[derive(Debug)]
 pub enum ActionKind<'a> {
     /// Final unit of code that represents a constant string
     ConstString(String),
@@ -18,6 +19,64 @@ pub enum ActionKind<'a> {
         body: Vec<ActionKind<'a>>,
     },
     GetVariable(&'a str),
+    BinaryOperation {
+        op: OperatorKind,
+        left: Box<ActionKind<'a>>,
+        right: Box<ActionKind<'a>>,
+    },
+}
+
+impl<'a> Display for ActionKind<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            ActionKind::ConstString(s) => write!(f, "CONST({s})"),
+            ActionKind::Function {
+                tag_name,
+                arguments,
+                body,
+            } => {
+                write!(
+                    f,
+                    "FUNCTION(tag: {tag_name}, arguments: {}, body : {})",
+                    arguments
+                        .iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect::<Vec<String>>()
+                        .join(","),
+                    if let Some(b) = body {
+                        b.to_string()
+                    } else {
+                        "none".to_owned()
+                    }
+                )
+            }
+            ActionKind::FunctionSequence {
+                tag_name,
+                arguments,
+                body,
+            } => write!(
+                f,
+                "FUNCTION(tag: {tag_name}, arguments: \"{}\", body : \"{}\")",
+                arguments
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<String>>()
+                    .join(","),
+                body.iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(";")
+            ),
+            ActionKind::GetVariable(s) => write!(f, "VAR({s})"),
+            ActionKind::BinaryOperation { op, left, right } => write!(
+                f,
+                "OPERATION(op: {:?}, left: {}, right: {})",
+                op,
+                left.to_string(),
+                right.to_string()
+            ),
+        }
+    }
 }
 
 impl<'a> ActionKind<'a> {
@@ -54,6 +113,12 @@ impl<'a> ActionKind<'a> {
                 }
                 format!("{result}</{tag_name}>")
             }
+            ActionKind::BinaryOperation { op, left, right } => match op {
+                OperatorKind::Assign => todo!(),
+                OperatorKind::StringConcat => {
+                    return format!("{}{}", left.generate(state), right.generate(state));
+                }
+            },
             _ => todo!(),
         }
     }
@@ -63,7 +128,7 @@ impl<'a> ActionKind<'a> {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::execution::ActionKind;
+    use crate::action::ActionKind;
     use crate::state::State;
 
     #[test]

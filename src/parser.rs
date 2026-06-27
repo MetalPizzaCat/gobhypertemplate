@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    execution::ActionKind,
+    action::ActionKind,
     lexer::{OperatorKind, ParsingError, SeparatorKind, Token, TokenKind},
 };
 
@@ -27,8 +27,54 @@ macro_rules! is_current_of_kind {
     }};
 }
 
+/// Check if current token matches the provided value and if it does, advance to the next symbol discarding current value
+/// Otherwise a parsing value is returned
 macro_rules! consume_token {
-    () => {};
+    ($self:expr, $a:pat, $err:expr) => {
+        if let Some(tok) = $self.tokens.peek()
+            && matches!(tok.get_kind(), $a)
+        {
+            $self.tokens.next();
+            Ok(())
+        } else {
+            Err(ParsingError::new_with_message(
+                crate::lexer::ParsingErrorKind::UnexpectedCharacter,
+                $err,
+                $self.get_row(),
+                $self.get_column(),
+            ))
+        }
+    };
+}
+
+/// Attempt to get the inner value of the kind field of the token
+/// If it doesn't match the provided type it will throw an error.
+///
+/// # Example
+/// ```no_run
+/// get_token_value_of_kind(self, TokenKind::Separator(SeparatorKind::BracketOpen), "Expected '('".to_owned())
+/// ```
+macro_rules! get_token_value_of_kind {
+    ($self:expr, $t:path, $err:expr) => {
+        if let Some(tok) = $self.tokens.peek() {
+            match tok.get_kind() {
+                $t(s) => Ok(s),
+                _ => Err(ParsingError::new_with_message(
+                    crate::lexer::ParsingErrorKind::UnexpectedCharacter,
+                    $err,
+                    $self.get_row(),
+                    $self.get_column(),
+                )),
+            }
+        } else {
+            Err(ParsingError::new_with_message(
+                crate::lexer::ParsingErrorKind::UnexpectedCharacter,
+                $err,
+                $self.get_row(),
+                $self.get_column(),
+            ))
+        }
+    };
 }
 
 macro_rules! expect_token_pattern {
@@ -65,22 +111,6 @@ impl<'a> Parser<'a> {
             None
         }
     }
-
-    pub fn get_current_as_id(&mut self, error: &'static str) -> Result<&'a str, ParsingError> {
-        if let Some(tok) = self.tokens.peek() {
-            match tok.get_kind() {
-                TokenKind::Identifier(s) => return Ok(s),
-                _ => {}
-            }
-        }
-        Err(ParsingError::new_with_message(
-            crate::lexer::ParsingErrorKind::UnexpectedCharacter,
-            error.to_string(),
-            self.get_row(),
-            self.get_column(),
-        ))
-    }
-
     /// Advance the token iterator and record the debug position info
     pub fn next(&mut self) -> Option<&Token<'a>> {
         if let Some(curr) = self.tokens.peek() {
@@ -104,52 +134,6 @@ impl<'a> Parser<'a> {
         } else {
             self.last_row
         }
-    }
-
-    /// Attempt to consume the current token if it's the separator provided otherwise throw an error.
-    /// Advances the iterator if it's the expected separator
-    pub fn consume_separator(&mut self, sep: SeparatorKind) -> Result<(), ParsingError> {
-        if let Some(tok) = self.tokens.peek() {
-            match tok.get_kind() {
-                TokenKind::Separator(s) => {
-                    if sep == s {
-                        self.tokens.next();
-                        return Ok(());
-                    }
-                }
-                _ => {}
-            }
-        }
-        Err(ParsingError::new_with_message(
-            crate::lexer::ParsingErrorKind::UnexpectedCharacter,
-            format!("Expected {}", sep.to_char()),
-            self.get_row(),
-            self.get_column(),
-        ))
-    }
-
-    /// Attempt to consume the current token if it's the separator provided otherwise throw an error.
-    /// Advances the iterator if it's the expected separator
-    pub fn consume_operator(&mut self, sep: OperatorKind) -> Result<(), ParsingError> {
-        if let Some(tok) = self.tokens.peek() {
-            match tok.get_kind() {
-                TokenKind::Operator(s) => {
-                    if sep == s {
-                        self.tokens.next();
-                        return Ok(());
-                    }
-                }
-                _ => {
-                    println!("{:?}", tok.get_kind());
-                }
-            }
-        }
-        Err(ParsingError::new_with_message(
-            crate::lexer::ParsingErrorKind::UnexpectedCharacter,
-            format!("Expected {}", sep.to_char()),
-            self.get_row(),
-            self.get_column(),
-        ))
     }
 
     /// Attempt to parse unit of the language
@@ -181,16 +165,94 @@ impl<'a> Parser<'a> {
     pub fn parse_argument(&mut self) -> Result<Option<(&'a str, ActionKind<'a>)>, ParsingError> {
         if let Some(arg_name) = self.try_get_as_token_id() {
             self.next();
-            self.consume_operator(OperatorKind::Assign)?;
+            consume_token!(
+                self,
+                TokenKind::Operator(OperatorKind::Assign),
+                "Expected '='".to_owned()
+            )?;
             return Ok(Some((arg_name, self.parse_unit()?.unwrap())));
         }
         Ok(None)
     }
 
+    pub fn get_binary_operation_priority(&mut self) -> i32 {
+        if let Some(t) = self.tokens.peek() {
+            t.get_priority()
+        } else {
+            -1
+        }
+    }
+
+    pub fn parse_binary_right_side(
+        &mut self,
+        priority: i32,
+        left: ActionKind<'a>,
+    ) -> Result<Option<ActionKind<'a>>, ParsingError> {
+        let mut left = left;
+        loop {
+            let tok_priority: i32 = self.get_binary_operation_priority();
+
+            if tok_priority < priority {
+                return Ok(Some(left));
+            }
+
+            let op = get_token_value_of_kind!(
+                self,
+                TokenKind::Operator,
+                "Expected an operator".to_owned()
+            )?;
+            self.next();
+
+            // we start by trying to parse anything that might be on the right
+            if let Some(mut right_val) = self.parse_unit()? {
+                let next_priority = self.get_binary_operation_priority();
+                // however we also need to check if next operation should be calculated before current one
+                if tok_priority < next_priority {
+                    // in which case we do and just replace previous parsed value with this
+                    if let Some(right_next) =
+                        self.parse_binary_right_side(tok_priority + 1, right_val)?
+                    {
+                        right_val = right_next
+                    } else {
+                        return Ok(None);
+                    }
+                }
+                // regardless we have to combine existing data into a new operator and continue with the parsing
+                left = ActionKind::BinaryOperation {
+                    op: op,
+                    left: Box::new(left),
+                    right: Box::new(right_val),
+                };
+            } else {
+                // and if we don't find anything we conclude that it is not a binary expression
+                // this WILL mess up rest of the parser due to consumption of the operator
+                // but that's by design, an operator should not just exist freely
+                return Ok(None);
+            }
+        }
+    }
+
+    pub fn parse_expression(&mut self) -> Result<Option<ActionKind<'a>>, ParsingError> {
+        let left = self.parse_unit()?;
+        if let Some(left) = left {
+            return self.parse_binary_right_side(0, left);
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn parse_call(&mut self) -> Result<ActionKind<'a>, ParsingError> {
-        let id = self.get_current_as_id("Expected function name")?;
+        let id = get_token_value_of_kind!(
+            self,
+            TokenKind::Identifier,
+            "Expected function name".to_owned()
+        )?;
         self.next();
-        self.consume_separator(SeparatorKind::BracketOpen)?;
+        consume_token!(
+            self,
+            TokenKind::Separator(SeparatorKind::BracketOpen),
+            "Expected '('".to_owned()
+        )?;
         let mut arguments: HashMap<&'a str, ActionKind<'a>> = HashMap::new();
         while let Some((arg, act)) = self.parse_argument()? {
             arguments.insert(arg, act);
@@ -198,26 +260,43 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        self.consume_separator(SeparatorKind::BracketClose)?;
+        consume_token!(
+            self,
+            TokenKind::Separator(SeparatorKind::BracketClose),
+            "Expected ')'".to_owned()
+        )?;
 
         let mut body: Vec<ActionKind> = Vec::new();
-        self.consume_separator(SeparatorKind::BlockOpen)?;
-        loop {
-            if let Some(act) = self.parse_unit()? {
-                self.consume_separator(SeparatorKind::Semicolon)?;
-                body.push(act);
-            } else if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose)) {
-                break;
-            }
-        }
-        // while let Some(act) = self.parse_unit()? {
-        //     self.consume_separator(SeparatorKind::Semicolon)?;
-        //     body.push(act);
-        //     if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose)) {
+        consume_token!(
+            self,
+            TokenKind::Separator(SeparatorKind::BlockOpen),
+            "Expected '{'".to_owned()
+        )?;
+        // loop {
+        //     if let Some(act) = self.parse_unit()? {
+        //         self.consume_separator(SeparatorKind::Semicolon)?;
+        //         body.push(act);
+        //     } else if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose)) {
         //         break;
         //     }
         // }
-        self.consume_separator(SeparatorKind::BlockClose)?;
+        while let Some(act) = self.parse_expression()? {
+            consume_token!(
+                self,
+                TokenKind::Separator(SeparatorKind::Semicolon),
+                "Expected ';' after the end of the expression".to_owned()
+            )?;
+            body.push(act);
+            if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose)) {
+                break;
+            }
+        }
+
+        consume_token!(
+            self,
+            TokenKind::Separator(SeparatorKind::BlockClose),
+            "Expected '}'".to_owned()
+        )?;
 
         Ok(ActionKind::FunctionSequence {
             tag_name: id,
@@ -232,7 +311,7 @@ mod tests {
     use std::error::Error;
 
     use crate::{
-        execution::ActionKind,
+        action::ActionKind,
         lexer::{OperatorKind, SeparatorKind, Token, TokenKind},
         parser::Parser,
     };
@@ -308,6 +387,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parse_expression() -> Result<(), Box<dyn Error>> {
+        let tokens = vec![
+            Token::new(TokenKind::StringConst("hello world".to_string()), 0, 0),
+            Token::new(TokenKind::Operator(OperatorKind::StringConcat), 0, 0),
+            Token::new(TokenKind::StringConst("hello world".to_string()), 0, 0),
+        ];
+        let mut parser = Parser::new(&tokens);
+        let res = parser.parse_expression()?.unwrap();
+        match res {
+            ActionKind::BinaryOperation { op, left, right } => return Ok(()),
+            _ => panic!(""),
+        }
+    }
+
+
+    #[test]
+    fn parse_expression_multiple() -> Result<(), Box<dyn Error>> {
+        let tokens = vec![
+            Token::new(TokenKind::StringConst("hello".to_string()), 0, 0),
+            Token::new(TokenKind::Operator(OperatorKind::StringConcat), 0, 0),
+            Token::new(TokenKind::StringConst("world".to_string()), 0, 0),
+            Token::new(TokenKind::Operator(OperatorKind::StringConcat), 0, 0),
+            Token::new(TokenKind::StringConst("!".to_string()), 0, 0),
+        ];
+        let mut parser = Parser::new(&tokens);
+        let res = parser.parse_expression()?.unwrap();
+        let s = res.to_string();
+        match res {
+            ActionKind::BinaryOperation { op, left, right } => match *left {
+                ActionKind::BinaryOperation { op, left, right } => return Ok(()),
+                _ => panic!("expected nested expr: {s}"),
+            },
+            _ => panic!("expected expr: {s}"),
+        }
+    }
     #[test]
     fn parse_empty_with_one_argument() -> Result<(), Box<dyn Error>> {
         let tokens = vec![

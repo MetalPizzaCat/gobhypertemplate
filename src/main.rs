@@ -1,4 +1,4 @@
-pub mod execution;
+pub mod action;
 pub mod lexer;
 pub mod parser;
 pub mod state;
@@ -46,6 +46,36 @@ mod tests {
         assert_eq!(
             parser.parse_unit()?.unwrap().generate(&mut state),
             "<p class=\"bla\">hello world</p>".to_owned()
+        );
+
+        Ok(())
+    }
+    
+    #[test]
+    fn test_full_gen_tag_multiple_statements() -> Result<(), Box<dyn Error>> {
+        let mut lexer = Lexer::new("p(class = \"bla\"){\"hello world\"; \"hehe\";}");
+        lexer.tokenize()?;
+        let tokens = lexer.get_tokens();
+        let mut parser = Parser::new(&tokens);
+        let mut state = State::default();
+        assert_eq!(
+            parser.parse_unit()?.unwrap().generate(&mut state),
+            "<p class=\"bla\">hello worldhehe</p>".to_owned()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_full_gen_concat() -> Result<(), Box<dyn Error>> {
+        let mut lexer = Lexer::new("p(){\"hello world\" @ \"k\" @ \"hehe\";}");
+        lexer.tokenize()?;
+        let tokens = lexer.get_tokens();
+        let mut parser = Parser::new(&tokens);
+        let mut state = State::default();
+        assert_eq!(
+            parser.parse_unit()?.unwrap().generate(&mut state),
+            "<p >hello worldkhehe</p>".to_owned()
         );
 
         Ok(())

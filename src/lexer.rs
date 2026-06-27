@@ -111,6 +111,13 @@ impl OperatorKind {
             OperatorKind::StringConcat => '@',
         }
     }
+
+    pub fn get_priority(&self) -> i32 {
+        match &self {
+            OperatorKind::Assign => 1,
+            OperatorKind::StringConcat => 5,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -155,6 +162,13 @@ impl<'a> Token<'a> {
 
     pub fn get_column(&self) -> usize {
         self.column
+    }
+
+    pub fn get_priority(&self) -> i32 {
+        match &self.kind {
+            TokenKind::Operator(operator_kind) => operator_kind.get_priority(),
+            _ => -1,
+        }
     }
 }
 
