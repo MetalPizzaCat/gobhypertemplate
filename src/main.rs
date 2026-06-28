@@ -29,7 +29,7 @@ mod tests {
         let mut parser = Parser::new(&tokens);
         let mut state = State::default();
         assert_eq!(
-            parser.parse_unit()?.unwrap().generate(&mut state),
+            parser.parse_unit()?.unwrap().generate(&mut state)?.unwrap(),
             "hello world".to_owned()
         );
 
@@ -44,13 +44,13 @@ mod tests {
         let mut parser = Parser::new(&tokens);
         let mut state = State::default();
         assert_eq!(
-            parser.parse_unit()?.unwrap().generate(&mut state),
+            parser.parse_unit()?.unwrap().generate(&mut state)?.unwrap(),
             "<p class=\"bla\">hello world</p>".to_owned()
         );
 
         Ok(())
     }
-    
+
     #[test]
     fn test_full_gen_tag_multiple_statements() -> Result<(), Box<dyn Error>> {
         let mut lexer = Lexer::new("p(class = \"bla\"){\"hello world\"; \"hehe\";}");
@@ -59,7 +59,7 @@ mod tests {
         let mut parser = Parser::new(&tokens);
         let mut state = State::default();
         assert_eq!(
-            parser.parse_unit()?.unwrap().generate(&mut state),
+            parser.parse_unit()?.unwrap().generate(&mut state)?.unwrap(),
             "<p class=\"bla\">hello worldhehe</p>".to_owned()
         );
 
@@ -74,7 +74,7 @@ mod tests {
         let mut parser = Parser::new(&tokens);
         let mut state = State::default();
         assert_eq!(
-            parser.parse_unit()?.unwrap().generate(&mut state),
+            parser.parse_unit()?.unwrap().generate(&mut state)?.unwrap(),
             "<p >hello worldkhehe</p>".to_owned()
         );
 

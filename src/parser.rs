@@ -77,18 +77,6 @@ macro_rules! get_token_value_of_kind {
     };
 }
 
-macro_rules! expect_token_pattern {
-    ($self:expr, $pattern:pat) => {{
-        let token = $self.next_token();
-        match token.kind() {
-            $pattern => Ok(token),
-            _ => Err(ParseError::new(
-                ParseErrorKind::ExpectedToken,
-                token.clone(),
-            )),
-        }
-    }};
-}
 
 impl<'a> Parser<'a> {
     pub fn new(input: &'a [Token<'a>]) -> Self {

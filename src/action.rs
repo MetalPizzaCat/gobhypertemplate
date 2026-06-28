@@ -1,8 +1,11 @@
-use std::{collections::HashMap, fmt::Display};
+use std::{collections::HashMap, fmt::Display, rc::Rc};
 
-use crate::{lexer::OperatorKind, state::State};
+use crate::{
+    lexer::OperatorKind,
+    state::{ExecutionError, State},
+};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ActionKind<'a> {
     /// Final unit of code that represents a constant string
     ConstString(String),
@@ -23,6 +26,15 @@ pub enum ActionKind<'a> {
         op: OperatorKind,
         left: Box<ActionKind<'a>>,
         right: Box<ActionKind<'a>>,
+    },
+    UserFunctionCall {
+        function_name: &'a str,
+        arguments: HashMap<&'a str, ActionKind<'a>>,
+    },
+    UserFunctionDeclaration {
+        function_name: &'a str,
+        arguments: Vec<&'a str>,
+        body: Rc<Box<ActionKind<'a>>>,
     },
 }
 
@@ -75,14 +87,36 @@ impl<'a> Display for ActionKind<'a> {
                 left.to_string(),
                 right.to_string()
             ),
+            ActionKind::UserFunctionCall {
+                function_name,
+                arguments,
+            } => write!(
+                f,
+                "FUNC_CALL(name : {function_name}, args : \"{}\")",
+                arguments
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<String>>()
+                    .join(","),
+            ),
+            ActionKind::UserFunctionDeclaration {
+                function_name,
+                arguments,
+                body,
+            } => write!(
+                f,
+                "DECLARATION(name : {function_name}, args : {}, body : {}",
+                arguments.join(","),
+                body.to_string()
+            ),
         }
     }
 }
 
 impl<'a> ActionKind<'a> {
-    pub fn generate(&self, state: &mut State) -> String {
+    pub fn generate(&self, state: &mut State<'a>) -> Result<Option<String>, ExecutionError> {
         match &self {
-            ActionKind::ConstString(s) => s.to_string(),
+            ActionKind::ConstString(s) => Ok(Some(s.to_string())),
             ActionKind::Function {
                 tag_name,
                 arguments,
@@ -90,13 +124,18 @@ impl<'a> ActionKind<'a> {
             } => {
                 let mut result = format!("<{tag_name} ");
                 for (arg, val) in arguments {
-                    result += &format!("{arg}=\"{}\"", val.generate(state));
+                    result += &format!(
+                        "{arg}=\"{}\"",
+                        val.generate(state)?.unwrap_or_else(|| String::new())
+                    );
                 }
                 result += ">";
                 if let Some(body) = body {
-                    result += &body.generate(state);
+                    if let Some(res) = body.generate(state)? {
+                        result += &res;
+                    }
                 }
-                format!("{result}</{tag_name}>")
+                Ok(Some(format!("{result}</{tag_name}>")))
             }
             ActionKind::FunctionSequence {
                 tag_name,
@@ -105,20 +144,49 @@ impl<'a> ActionKind<'a> {
             } => {
                 let mut result = format!("<{tag_name} ");
                 for (arg, val) in arguments {
-                    result += &format!("{arg}=\"{}\"", val.generate(state));
+                    result += &format!(
+                        "{arg}=\"{}\"",
+                        val.generate(state)?.unwrap_or_else(|| String::new())
+                    );
                 }
                 result += ">";
                 for seq in body {
-                    result += &seq.generate(state);
+                    if let Some(statement) = seq.generate(state)? {
+                        result += &statement;
+                    }
                 }
-                format!("{result}</{tag_name}>")
+                Ok(Some(format!("{result}</{tag_name}>")))
             }
             ActionKind::BinaryOperation { op, left, right } => match op {
                 OperatorKind::Assign => todo!(),
-                OperatorKind::StringConcat => {
-                    return format!("{}{}", left.generate(state), right.generate(state));
-                }
+                OperatorKind::StringConcat => Ok(Some(format!(
+                    "{}{}",
+                    left.generate(state)?.unwrap_or_else(|| String::new()),
+                    right.generate(state)?.unwrap_or_else(|| String::new()),
+                ))),
             },
+            ActionKind::UserFunctionCall {
+                function_name,
+                arguments,
+            } => {
+                let mut args: HashMap<&str, String> = HashMap::new();
+                for (arg_name, arg_val) in arguments {
+                    args.insert(
+                        *arg_name,
+                        arg_val.generate(state)?.unwrap_or_else(|| String::new()),
+                    );
+                }
+
+                state.execute_user_function(*function_name, args)
+            }
+            ActionKind::UserFunctionDeclaration {
+                function_name,
+                arguments,
+                body,
+            } => {
+                state.add_user_function(*function_name, arguments.clone(), body.clone());
+                Ok(None)
+            }
             _ => todo!(),
         }
     }
@@ -135,7 +203,7 @@ mod tests {
     fn test_string_generation() {
         let act = ActionKind::ConstString("hello world".to_owned());
         let mut state: State = State::default();
-        assert_eq!(act.generate(&mut state), "hello world".to_owned());
+        assert_eq!(act.generate(&mut state).unwrap().unwrap(), "hello world".to_owned());
     }
 
     #[test]
@@ -146,7 +214,7 @@ mod tests {
             body: None,
         };
         let mut state: State = State::default();
-        assert_eq!(act.generate(&mut state), "<div ></div>".to_owned());
+        assert_eq!(act.generate(&mut state).unwrap().unwrap(), "<div ></div>".to_owned());
     }
 
     #[test]
@@ -161,7 +229,7 @@ mod tests {
 
         let mut state: State = State::default();
         assert_eq!(
-            act.generate(&mut state),
+            act.generate(&mut state).unwrap().unwrap(),
             "<div class=\"amazing\"></div>".to_owned()
         );
     }
@@ -174,6 +242,9 @@ mod tests {
             body: vec![ActionKind::ConstString("hello world".to_owned())],
         };
         let mut state: State = State::default();
-        assert_eq!(act.generate(&mut state), "<p >hello world</p>".to_owned());
+        assert_eq!(
+            act.generate(&mut state).unwrap().unwrap(),
+            "<p >hello world</p>".to_owned()
+        );
     }
 }

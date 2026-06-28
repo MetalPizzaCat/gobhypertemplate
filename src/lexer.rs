@@ -9,7 +9,6 @@ pub enum ParsingErrorKind {
 }
 
 #[derive(Debug)]
-
 pub struct ParsingError {
     error_type: ParsingErrorKind,
     message: Option<String>,
@@ -56,6 +55,29 @@ impl Display for ParsingError {
         )
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum KeywordKind {
+    Function,
+    Let,
+    If,
+    Else,
+    Elif,
+}
+
+impl KeywordKind {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "let" => Some(Self::Let),
+            "def" => Some(Self::Function),
+            "if" => Some(Self::If),
+            "else" => Some(Self::Else),
+            "elif" => Some(Self::Elif),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SeparatorKind {
     BlockOpen,
@@ -122,14 +144,21 @@ impl OperatorKind {
 
 #[derive(Debug, Clone)]
 pub enum TokenKind<'a> {
-    // any text that isn't enclosed in string, such as tag contents or tag fields
+    /// any text that isn't enclosed in string, such as tag contents or tag fields
     Identifier(&'a str),
-    // This is using php style variable names to make it easier
+    /// Names of the function following the `%name`.
+    ///
+    /// Function names use separate naming style to avoid collision with html tags
+    Function(&'a str),
+    /// Names of the variable following the `$name` style.
+    ///
+    ///  This is using php style variable names to make it easier
     Variable(&'a str),
-    // any quote enclosed string
+    /// Any quote enclosed string
     StringConst(String),
     Separator(SeparatorKind),
     Operator(OperatorKind),
+    Keyword(KeywordKind),
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +166,16 @@ pub struct Token<'a> {
     kind: TokenKind<'a>,
     row: usize,
     column: usize,
+}
+
+impl<'a> Display for Token<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Token(kind:  {:?}, row: {}, column: {}",
+            self.kind, self.row, self.column
+        )
+    }
 }
 
 pub struct Lexer<'a> {
@@ -248,6 +287,28 @@ impl<'a> Lexer<'a> {
         return !tmp.next().is_some_and(|ch| ch.1.is_alphanumeric());
     }
 
+    pub fn tokenize_keyword(&mut self) -> Option<Token<'a>> {
+        if !self.peek_char().is_some_and(char::is_alphabetic) {
+            return None;
+        }
+        let mut it = self.chars_indices.clone();
+
+        let mut str_len: usize = 0;
+        if let Some((start, _)) = it.peek().cloned() {
+            while it.next_if(|(_, ch)| ch.is_alphabetic()).is_some() {
+                str_len += 1;
+            }
+            let keyword_str = &self.code[start..(start + str_len)];
+            if let Some(keyword) = KeywordKind::from_str(keyword_str) {
+                let tok = Token::new(TokenKind::Keyword(keyword), self.row, self.column);
+                self.advance_by(str_len);
+                return Some(tok);
+            }
+        }
+
+        None
+    }
+
     pub fn tokenize_id(&mut self) -> Option<Token<'a>> {
         if !self.peek_char().is_some_and(char::is_alphabetic) {
             return None;
@@ -269,6 +330,33 @@ impl<'a> Lexer<'a> {
                 self.column,
             );
             self.advance_by(str_len);
+            return Some(tok);
+        }
+
+        None
+    }
+
+    pub fn tokenize_function_name(&mut self) -> Option<Token<'a>> {
+        if !self.peek_char().is_some_and(|c| c == '%') {
+            return None;
+        }
+
+        let mut it = self.chars_indices.clone();
+        it.next();
+        let mut str_len: usize = 0;
+        if let Some((start, _)) = it.peek().cloned() {
+            while it
+                .next_if(|(_, c)| c.is_alphanumeric() || *c == '_')
+                .is_some()
+            {
+                str_len += 1;
+            }
+            let tok = Token::new(
+                TokenKind::Function(&self.code[start..(start + str_len)]),
+                self.row,
+                self.column,
+            );
+            self.advance_by(str_len + 1);
             return Some(tok);
         }
 
@@ -334,6 +422,8 @@ impl<'a> Lexer<'a> {
             let token = self
                 .tokenize_separator()
                 .or_else(|| self.tokenize_operator())
+                .or_else(|| self.tokenize_keyword())
+                .or_else(|| self.tokenize_function_name())
                 .or_else(|| self.tokenize_id())
                 .or_else(|| self.tokenize_string())
                 .ok_or(ParsingError::new(
@@ -362,7 +452,7 @@ impl<'a> Lexer<'a> {
 mod tests {
     use std::error::Error;
 
-    use crate::lexer::{Lexer, SeparatorKind, TokenKind};
+    use crate::lexer::{KeywordKind, Lexer, SeparatorKind, TokenKind};
 
     #[test]
     fn test_advance_by() {
@@ -430,9 +520,26 @@ mod tests {
     fn test_id_boundary() {
         let code = "va_r1()";
         let mut lexer = Lexer::new(code);
-        let res = lexer.tokenize_id();
-        assert!(res.is_some());
-        assert!(matches!(res.unwrap().kind, TokenKind::Identifier("va_r1")));
+        let res = lexer.tokenize_id().unwrap();
+        let s = res.to_string();
+        assert!(
+            matches!(res.kind, TokenKind::Identifier("va_r1")),
+            "Expected 'va_r1' got {}",
+            s
+        );
+    }
+
+    #[test]
+    fn test_function_name() {
+        let code = "%var1";
+        let mut lexer = Lexer::new(code);
+        let res = lexer.tokenize_function_name().unwrap();
+        let s = res.to_string();
+        assert!(
+            matches!(res.kind, TokenKind::Function("var1")),
+            "Expected var1 got {}",
+            s
+        );
     }
 
     #[test]
@@ -482,6 +589,27 @@ mod tests {
         lexer.tokenize()?;
         let res = lexer.get_tokens();
         assert_eq!(res.len(), 8);
+        Ok(())
+    }
+
+    #[test]
+    fn test_keyword() -> Result<(), Box<dyn Error>> {
+        let mut lexer = Lexer::new("def");
+        lexer.tokenize()?;
+        let res = lexer.get_tokens();
+        assert!(matches!(
+            res.first().unwrap().get_kind(),
+            TokenKind::Keyword(KeywordKind::Function)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_keyword_func_declaration() -> Result<(), Box<dyn Error>> {
+        let mut lexer = Lexer::new("def %userfunc(arg1,arg2,arg3){}");
+        lexer.tokenize()?;
+        let res = lexer.get_tokens();
+        assert_eq!(res.len(), 11);
         Ok(())
     }
 }
