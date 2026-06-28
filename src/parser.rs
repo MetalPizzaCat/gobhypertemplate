@@ -77,7 +77,6 @@ macro_rules! get_token_value_of_kind {
     };
 }
 
-
 impl<'a> Parser<'a> {
     pub fn new(input: &'a [Token<'a>]) -> Self {
         Parser {
@@ -229,6 +228,24 @@ impl<'a> Parser<'a> {
         }
     }
 
+    
+
+    pub fn parse_body(&mut self) -> Result<ActionKind<'a>, ParsingError> {
+        let mut sequence: Vec<ActionKind> = Vec::new();
+        while let Some(act) = self.parse_expression()? {
+            consume_token!(
+                self,
+                TokenKind::Separator(SeparatorKind::Semicolon),
+                "Expected ';' after the end of the expression".to_owned()
+            )?;
+            sequence.push(act);
+            if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose)) {
+                break;
+            }
+        }
+        Ok(ActionKind::Sequence(sequence))
+    }
+
     pub fn parse_call(&mut self) -> Result<ActionKind<'a>, ParsingError> {
         let id = get_token_value_of_kind!(
             self,
@@ -254,31 +271,13 @@ impl<'a> Parser<'a> {
             "Expected ')'".to_owned()
         )?;
 
-        let mut body: Vec<ActionKind> = Vec::new();
         consume_token!(
             self,
             TokenKind::Separator(SeparatorKind::BlockOpen),
             "Expected '{'".to_owned()
         )?;
-        // loop {
-        //     if let Some(act) = self.parse_unit()? {
-        //         self.consume_separator(SeparatorKind::Semicolon)?;
-        //         body.push(act);
-        //     } else if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose)) {
-        //         break;
-        //     }
-        // }
-        while let Some(act) = self.parse_expression()? {
-            consume_token!(
-                self,
-                TokenKind::Separator(SeparatorKind::Semicolon),
-                "Expected ';' after the end of the expression".to_owned()
-            )?;
-            body.push(act);
-            if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose)) {
-                break;
-            }
-        }
+
+        let body = self.parse_body()?;
 
         consume_token!(
             self,
@@ -286,10 +285,10 @@ impl<'a> Parser<'a> {
             "Expected '}'".to_owned()
         )?;
 
-        Ok(ActionKind::FunctionSequence {
+        Ok(ActionKind::Function {
             tag_name: id,
             arguments: arguments,
-            body: body,
+            body: Some(Box::new(body)),
         })
     }
 }
@@ -337,7 +336,7 @@ mod tests {
         let res = parser.parse_call()?;
 
         match res {
-            ActionKind::FunctionSequence {
+            ActionKind::Function {
                 tag_name,
                 arguments,
                 body,
@@ -363,16 +362,17 @@ mod tests {
         let res = parser.parse_call()?;
 
         match res {
-            ActionKind::FunctionSequence {
+            ActionKind::Function {
                 tag_name,
                 arguments,
                 body,
-            } => {
-                assert_eq!(body.len(), 1);
-                return Ok(());
-            }
+            } => match *body.unwrap() {
+                ActionKind::Sequence(b) => assert_eq!(b.len(), 1),
+                _ => panic!("Invalid function contents "),
+            },
             _ => panic!("Wrong value"),
         }
+        Ok(())
     }
 
     #[test]
@@ -389,7 +389,6 @@ mod tests {
             _ => panic!(""),
         }
     }
-
 
     #[test]
     fn parse_expression_multiple() -> Result<(), Box<dyn Error>> {
@@ -429,7 +428,7 @@ mod tests {
         let res = parser.parse_call()?;
 
         match res {
-            ActionKind::FunctionSequence {
+            ActionKind::Function {
                 tag_name,
                 arguments,
                 body,

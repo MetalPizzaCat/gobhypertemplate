@@ -16,11 +16,7 @@ pub enum ActionKind<'a> {
         body: Option<Box<ActionKind<'a>>>,
     },
     /// Function which has a body that can contain multiple children such as div
-    FunctionSequence {
-        tag_name: &'a str,
-        arguments: HashMap<&'a str, ActionKind<'a>>,
-        body: Vec<ActionKind<'a>>,
-    },
+    Sequence(Vec<ActionKind<'a>>),
     GetVariable(&'a str),
     BinaryOperation {
         op: OperatorKind,
@@ -62,23 +58,16 @@ impl<'a> Display for ActionKind<'a> {
                     }
                 )
             }
-            ActionKind::FunctionSequence {
-                tag_name,
-                arguments,
-                body,
-            } => write!(
-                f,
-                "FUNCTION(tag: {tag_name}, arguments: \"{}\", body : \"{}\")",
-                arguments
-                    .iter()
-                    .map(|(k, v)| format!("{k}={v}"))
-                    .collect::<Vec<String>>()
-                    .join(","),
-                body.iter()
-                    .map(|v| v.to_string())
-                    .collect::<Vec<String>>()
-                    .join(";")
-            ),
+            ActionKind::Sequence(seq) => {
+                write!(
+                    f,
+                    "SEQ({})",
+                    seq.iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<String>>()
+                        .join(";")
+                )
+            }
             ActionKind::GetVariable(s) => write!(f, "VAR({s})"),
             ActionKind::BinaryOperation { op, left, right } => write!(
                 f,
@@ -137,25 +126,14 @@ impl<'a> ActionKind<'a> {
                 }
                 Ok(Some(format!("{result}</{tag_name}>")))
             }
-            ActionKind::FunctionSequence {
-                tag_name,
-                arguments,
-                body,
-            } => {
-                let mut result = format!("<{tag_name} ");
-                for (arg, val) in arguments {
-                    result += &format!(
-                        "{arg}=\"{}\"",
-                        val.generate(state)?.unwrap_or_else(|| String::new())
-                    );
-                }
-                result += ">";
-                for seq in body {
-                    if let Some(statement) = seq.generate(state)? {
+            ActionKind::Sequence(seq) => {
+                let mut result = String::new();
+                for item in seq {
+                    if let Some(statement) = item.generate(state)? {
                         result += &statement;
                     }
                 }
-                Ok(Some(format!("{result}</{tag_name}>")))
+                Ok(Some(result))
             }
             ActionKind::BinaryOperation { op, left, right } => match op {
                 OperatorKind::Assign => todo!(),
@@ -203,7 +181,10 @@ mod tests {
     fn test_string_generation() {
         let act = ActionKind::ConstString("hello world".to_owned());
         let mut state: State = State::default();
-        assert_eq!(act.generate(&mut state).unwrap().unwrap(), "hello world".to_owned());
+        assert_eq!(
+            act.generate(&mut state).unwrap().unwrap(),
+            "hello world".to_owned()
+        );
     }
 
     #[test]
@@ -214,7 +195,10 @@ mod tests {
             body: None,
         };
         let mut state: State = State::default();
-        assert_eq!(act.generate(&mut state).unwrap().unwrap(), "<div ></div>".to_owned());
+        assert_eq!(
+            act.generate(&mut state).unwrap().unwrap(),
+            "<div ></div>".to_owned()
+        );
     }
 
     #[test]
@@ -236,15 +220,11 @@ mod tests {
 
     #[test]
     fn test_tag_generation_body_p() {
-        let act = ActionKind::FunctionSequence {
-            tag_name: "p",
-            arguments: HashMap::new(),
-            body: vec![ActionKind::ConstString("hello world".to_owned())],
-        };
+        let act = ActionKind::Sequence(vec![ActionKind::ConstString("hello world".to_owned())]);
         let mut state: State = State::default();
         assert_eq!(
             act.generate(&mut state).unwrap().unwrap(),
-            "<p >hello world</p>".to_owned()
+            "hello world".to_owned()
         );
     }
 }
