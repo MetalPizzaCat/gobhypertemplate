@@ -49,6 +49,15 @@ impl<'a> State<'a> {
         self.variables.pop();
     }
 
+    pub fn get_variable_value(&self, name: &str) -> Option<String> {
+        for scope in self.variables.iter().rev() {
+            if let Some(v) = scope.get(name) {
+                return Some(v.clone());
+            }
+        }
+        return None;
+    }
+
     pub fn execute_function(
         &mut self,
         body: &ActionKind<'a>,

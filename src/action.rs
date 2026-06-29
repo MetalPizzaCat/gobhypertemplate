@@ -165,7 +165,8 @@ impl<'a> ActionKind<'a> {
                 state.add_user_function(*function_name, arguments.clone(), body.clone());
                 Ok(None)
             }
-            _ => todo!(),
+            ActionKind::GetVariable(name) => Ok(state.get_variable_value(name)),
+          
         }
     }
 }

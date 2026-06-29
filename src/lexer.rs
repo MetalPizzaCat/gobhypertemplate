@@ -419,6 +419,10 @@ impl<'a> Lexer<'a> {
     pub fn tokenize(&mut self) -> Result<(), ParsingError> {
         while self.peek_char().is_some() {
             self.skip_char_while(char::is_whitespace);
+            // to account for code which has extra empty space at the end
+            if self.peek_char().is_none() {
+                break;
+            }
             let token = self
                 .tokenize_separator()
                 .or_else(|| self.tokenize_operator())
@@ -426,8 +430,13 @@ impl<'a> Lexer<'a> {
                 .or_else(|| self.tokenize_function_name())
                 .or_else(|| self.tokenize_id())
                 .or_else(|| self.tokenize_string())
-                .ok_or(ParsingError::new(
+                .ok_or(ParsingError::new_with_message(
                     ParsingErrorKind::UnknownCharacter,
+                    if let Some(c) = self.peek_char() {
+                        format!("Unexpected character {}", c)
+                    } else {
+                        format!("Unexpected EOL")
+                    },
                     self.row,
                     self.column,
                 ))?;
@@ -610,6 +619,107 @@ mod tests {
         lexer.tokenize()?;
         let res = lexer.get_tokens();
         assert_eq!(res.len(), 11);
+        Ok(())
+    }
+
+    #[test]
+    fn test_keyword_func_declaration_tokens() -> Result<(), Box<dyn Error>> {
+        let mut lexer = Lexer::new("def bla(){ \"bla\";}");
+        lexer.tokenize()?;
+        let res = lexer.get_tokens();
+        assert!(matches!(
+            res.get(0).unwrap().get_kind(),
+            TokenKind::Keyword(KeywordKind::Function)
+        ));
+        assert!(matches!(
+            res.get(1).unwrap().get_kind(),
+            TokenKind::Identifier("bla")
+        ));
+        assert!(matches!(
+            res.get(2).unwrap().get_kind(),
+            TokenKind::Separator(SeparatorKind::BracketOpen)
+        ));
+        assert!(matches!(
+            res.get(3).unwrap().get_kind(),
+            TokenKind::Separator(SeparatorKind::BracketClose)
+        ));
+        assert!(matches!(
+            res.get(4).unwrap().get_kind(),
+            TokenKind::Separator(SeparatorKind::BlockOpen)
+        ));
+        match res.get(5).unwrap().get_kind() {
+            TokenKind::StringConst(s) => assert_eq!(s, "bla".to_owned()),
+            _ => panic!(),
+        }
+        assert!(matches!(
+            res.get(6).unwrap().get_kind(),
+            TokenKind::Separator(SeparatorKind::Semicolon)
+        ));
+        assert!(matches!(
+            res.get(7).unwrap().get_kind(),
+            TokenKind::Separator(SeparatorKind::BlockClose)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_keyword_func_declaration_and_usage() -> Result<(), Box<dyn Error>> {
+        let mut lexer = Lexer::new(
+            r#"
+		def bla(){ "bla";}
+		%bla();
+		"#,
+        );
+        lexer.tokenize()?;
+        let res = lexer.get_tokens();
+        assert!(matches!(
+            res.get(0).unwrap().get_kind(),
+            TokenKind::Keyword(KeywordKind::Function)
+        ));
+        assert!(matches!(
+            res.get(1).unwrap().get_kind(),
+            TokenKind::Identifier("bla")
+        ));
+        assert!(matches!(
+            res.get(2).unwrap().get_kind(),
+            TokenKind::Separator(SeparatorKind::BracketOpen)
+        ));
+        assert!(matches!(
+            res.get(3).unwrap().get_kind(),
+            TokenKind::Separator(SeparatorKind::BracketClose)
+        ));
+        assert!(matches!(
+            res.get(4).unwrap().get_kind(),
+            TokenKind::Separator(SeparatorKind::BlockOpen)
+        ));
+        match res.get(5).unwrap().get_kind() {
+            TokenKind::StringConst(s) => assert_eq!(s, "bla".to_owned()),
+            _ => panic!(),
+        }
+        assert!(matches!(
+            res.get(6).unwrap().get_kind(),
+            TokenKind::Separator(SeparatorKind::Semicolon)
+        ));
+        assert!(matches!(
+            res.get(7).unwrap().get_kind(),
+            TokenKind::Separator(SeparatorKind::BlockClose)
+        ));
+        assert!(matches!(
+            res.get(8).unwrap().get_kind(),
+            TokenKind::Function("bla")
+        ));
+        assert!(matches!(
+            res.get(9).unwrap().get_kind(),
+            TokenKind::Separator(SeparatorKind::BracketOpen)
+        ));
+        assert!(matches!(
+            res.get(10).unwrap().get_kind(),
+            TokenKind::Separator(SeparatorKind::BracketClose)
+        ));
+        assert!(matches!(
+            res.get(11).unwrap().get_kind(),
+            TokenKind::Separator(SeparatorKind::Semicolon)
+        ));
         Ok(())
     }
 }

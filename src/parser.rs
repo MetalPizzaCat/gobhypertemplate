@@ -1,8 +1,12 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use crate::{
     action::ActionKind,
-    lexer::{OperatorKind, ParsingError, SeparatorKind, Token, TokenKind},
+    lexer::{
+        KeywordKind, OperatorKind, ParsingError,
+        SeparatorKind::{self, Comma},
+        Token, TokenKind,
+    },
 };
 
 pub struct Parser<'a> {
@@ -13,7 +17,14 @@ pub struct Parser<'a> {
     last_row: usize,
     last_column: usize,
 }
-
+/// Check if given token is not None and  matches the current type
+///
+/// # Example
+/// ```no_run
+///  if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose)) {
+///       // if token is of type
+///  }
+/// ```
 macro_rules! is_current_of_kind {
     ($self:expr, $pattern:pat) => {{
         if let Some(tok) = $self.tokens.peek() {
@@ -28,7 +39,16 @@ macro_rules! is_current_of_kind {
 }
 
 /// Check if current token matches the provided value and if it does, advance to the next symbol discarding current value
-/// Otherwise a parsing value is returned
+/// Otherwise a parsing error is returned
+///
+/// # Example
+/// ```no_run
+/// consume_token!(
+///     self,
+///     TokenKind::Operator(OperatorKind::Assign),
+///     "Expected '='".to_owned()
+/// )?;
+/// ```
 macro_rules! consume_token {
     ($self:expr, $a:pat, $err:expr) => {
         if let Some(tok) = $self.tokens.peek()
@@ -131,13 +151,21 @@ impl<'a> Parser<'a> {
                 // any identifier will be considered a function call
                 // this way any operation like variable operations could be done as separate functions
                 TokenKind::Identifier(_) => Some(self.parse_call()?),
-                TokenKind::Variable(name) => Some(ActionKind::GetVariable(name)),
-                TokenKind::StringConst(s) => Some(ActionKind::ConstString(s)),
+
+                TokenKind::Variable(name) => {
+                    self.next();
+                    Some(ActionKind::GetVariable(name))
+                }
+                TokenKind::StringConst(s) => {
+                    self.next();
+                    Some(ActionKind::ConstString(s))
+                }
+                TokenKind::Function(_) => self.parse_user_function_call()?,
                 _ => None,
             };
-            if act.is_some() {
-                self.next();
-            }
+            // if act.is_some() {
+            //     self.next();
+            // }
             return Ok(act);
         } else {
             return Err(ParsingError::new_with_message(
@@ -228,18 +256,125 @@ impl<'a> Parser<'a> {
         }
     }
 
-    
+    pub fn parse_user_function_call(&mut self) -> Result<Option<ActionKind<'a>>, ParsingError> {
+        if !is_current_of_kind!(self, TokenKind::Function(_)) {
+            return Ok(None);
+        }
+        let name = get_token_value_of_kind!(
+            self,
+            TokenKind::Function,
+            "Expected function name".to_owned()
+        )?;
+        self.next();
+        consume_token!(
+            self,
+            TokenKind::Separator(SeparatorKind::BracketOpen),
+            "Expected '('".to_owned()
+        )?;
+
+        let mut arguments: HashMap<&'a str, ActionKind<'a>> = HashMap::new();
+        while let Some((arg, act)) = self.parse_argument()? {
+            arguments.insert(arg, act);
+            if !is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::Comma)) {
+                break;
+            }
+        }
+
+        consume_token!(
+            self,
+            TokenKind::Separator(SeparatorKind::BracketClose),
+            "Expected ')'".to_owned()
+        )?;
+
+        Ok(Some(ActionKind::UserFunctionCall {
+            function_name: name,
+            arguments,
+        }))
+    }
+
+    pub fn parse_function_definition(&mut self) -> Result<Option<ActionKind<'a>>, ParsingError> {
+        if !is_current_of_kind!(self, TokenKind::Keyword(KeywordKind::Function)) {
+            return Ok(None);
+        }
+        self.next();
+        let name = get_token_value_of_kind!(
+            self,
+            TokenKind::Identifier,
+            "Expected function name".to_owned()
+        )?;
+        self.next();
+
+        consume_token!(
+            self,
+            TokenKind::Separator(SeparatorKind::BracketOpen),
+            "Expected '(' for argument declaration".to_owned()
+        )?;
+        let mut args: Vec<&str> = Vec::new();
+        while is_current_of_kind!(self, TokenKind::Identifier(_)) {
+            args.push(get_token_value_of_kind!(
+                self,
+                TokenKind::Identifier,
+                "Expected argument name".to_owned()
+            )?);
+            self.next();
+            if !is_current_of_kind!(self, TokenKind::Separator(Comma)) {
+                break;
+            }
+        }
+        consume_token!(
+            self,
+            TokenKind::Separator(SeparatorKind::BracketClose),
+            "Expected ')' for argument declaration".to_owned()
+        )?;
+        consume_token!(
+            self,
+            TokenKind::Separator(SeparatorKind::BlockOpen),
+            "Expected '{'".to_owned()
+        )?;
+        let body = self.parse_body()?;
+        consume_token!(
+            self,
+            TokenKind::Separator(SeparatorKind::BlockClose),
+            "Expected '}'".to_owned()
+        )?;
+        Ok(Some(ActionKind::UserFunctionDeclaration {
+            function_name: name,
+            arguments: args,
+            body: Rc::new(Box::new(body)),
+        }))
+    }
+
+    /// Parse unit of logic that can be executed within a body, such as variable assignment or function declaration
+    pub fn parse_sequence_unit(&mut self) -> Result<Option<ActionKind<'a>>, ParsingError> {
+        if let Some(act) = self.parse_expression()? {
+            Ok(Some(act))
+        } else if let Some(act_def) = self.parse_function_definition()? {
+            Ok(Some(act_def))
+        } else {
+            Ok(None)
+        }
+    }
 
     pub fn parse_body(&mut self) -> Result<ActionKind<'a>, ParsingError> {
         let mut sequence: Vec<ActionKind> = Vec::new();
-        while let Some(act) = self.parse_expression()? {
+        while let Some(act) = self.parse_sequence_unit()? {
+            // let s = if let Some(t) = self.tokens.peek() {
+            //     t.to_string()
+            // } else {
+            //     "EOL".to_string()
+            // };
+
+            // let s2: &str = s.as_ref();
+
             consume_token!(
                 self,
                 TokenKind::Separator(SeparatorKind::Semicolon),
                 "Expected ';' after the end of the expression".to_owned()
             )?;
             sequence.push(act);
-            if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose)) {
+            if is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::BlockClose))
+                || self.tokens.peek().is_none()
+            {
                 break;
             }
         }
@@ -299,7 +434,7 @@ mod tests {
 
     use crate::{
         action::ActionKind,
-        lexer::{OperatorKind, SeparatorKind, Token, TokenKind},
+        lexer::{KeywordKind, OperatorKind, SeparatorKind, Token, TokenKind},
         parser::Parser,
     };
 
@@ -409,6 +544,60 @@ mod tests {
             },
             _ => panic!("expected expr: {s}"),
         }
+    }
+
+    #[test]
+    fn parse_function_declaration() -> Result<(), Box<dyn Error>> {
+        let tokens = vec![
+            Token::new(TokenKind::Keyword(KeywordKind::Function), 0, 1),
+            Token::new(TokenKind::Identifier("f"), 1, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BracketOpen), 2, 0),
+            Token::new(TokenKind::Identifier("arg1"), 3, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BracketClose), 4, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BlockOpen), 5, 0),
+            Token::new(TokenKind::StringConst("world".to_string()), 5, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::Semicolon), 6, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BlockClose), 7, 0),
+        ];
+
+        let mut parser = Parser::new(&tokens);
+
+        let res = parser.parse_function_definition()?.unwrap();
+        match res {
+            ActionKind::UserFunctionDeclaration {
+                function_name,
+                arguments,
+                body,
+            } => assert_eq!(function_name, "f"),
+            _ => panic!("Expected function got {}", res),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn parse_function_declaration_with_statement() -> Result<(), Box<dyn Error>> {
+        let tokens = vec![
+            Token::new(TokenKind::Keyword(KeywordKind::Function), 0, 1),
+            Token::new(TokenKind::Identifier("f"), 1, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BracketOpen), 2, 0),
+            Token::new(TokenKind::Identifier("arg1"), 3, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BracketClose), 4, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BlockOpen), 5, 0),
+            Token::new(TokenKind::Separator(SeparatorKind::BlockClose), 6, 0),
+        ];
+
+        let mut parser = Parser::new(&tokens);
+
+        let res = parser.parse_function_definition()?.unwrap();
+        match res {
+            ActionKind::UserFunctionDeclaration {
+                function_name,
+                arguments,
+                body,
+            } => assert_eq!(function_name, "f"),
+            _ => panic!("Expected function got {}", res),
+        }
+        Ok(())
     }
     #[test]
     fn parse_empty_with_one_argument() -> Result<(), Box<dyn Error>> {
