@@ -283,7 +283,7 @@ impl<'a> Parser<'a> {
         consume_token!(
             self,
             TokenKind::Separator(SeparatorKind::BracketClose),
-            "Expected ')'".to_owned()
+            "Expected ')' to close user function call arguments".to_owned()
         )?;
 
         Ok(Some(ActionKind::UserFunctionCall {
@@ -403,7 +403,7 @@ impl<'a> Parser<'a> {
         consume_token!(
             self,
             TokenKind::Separator(SeparatorKind::BracketClose),
-            "Expected ')'".to_owned()
+            "Expected ')' to close call arguments".to_owned()
         )?;
 
         consume_token!(

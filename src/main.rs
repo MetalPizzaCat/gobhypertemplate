@@ -137,7 +137,28 @@ mod tests {
         Ok(())
     }
 
-	#[test]
+    #[test]
+    fn test_full_user_function_with_argument() -> Result<(), Box<dyn Error>> {
+        let mut lexer = Lexer::new(
+            r#"
+		def bla(a){ $a;};
+		%bla(a = "1");
+		%bla(a = "2");
+		"#,
+        );
+        lexer.tokenize()?;
+        let tokens = lexer.get_tokens();
+        let mut parser = Parser::new(&tokens);
+        let mut state = State::default();
+        assert_eq!(
+            parser.parse_body()?.generate(&mut state)?.unwrap(),
+            "12".to_owned()
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_full_user_function_multiple() -> Result<(), Box<dyn Error>> {
         let mut lexer = Lexer::new(
             r#"
@@ -174,12 +195,12 @@ mod tests {
                 .is_none()
         );
 
-		assert!(state.get_user_function("bla").is_some());
+        assert!(state.get_user_function("bla").is_some());
 
         Ok(())
     }
 
-	// #[test]
+    // #[test]
     // fn test_full_user_function_decl_with_arg() -> Result<(), Box<dyn Error>> {
     //     let mut lexer = Lexer::new(r#"def bla(a){ $a;}"#);
     //     lexer.tokenize()?;
@@ -194,7 +215,7 @@ mod tests {
     //             .is_none()
     //     );
 
-	// 	assert!(state.get_user_function("bla").is_some());
+    // 	assert!(state.get_user_function("bla").is_some());
 
     //     Ok(())
     // }

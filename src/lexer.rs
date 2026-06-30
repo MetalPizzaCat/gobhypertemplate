@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display};
+use std::{error::Error, fmt::Display, iter::Peekable, str::CharIndices};
 
 #[derive(Debug)]
 pub enum ParsingErrorKind {
@@ -363,6 +363,33 @@ impl<'a> Lexer<'a> {
         None
     }
 
+    pub fn tokenize_variable_name(&mut self) -> Option<Token<'a>> {
+        if !self.peek_char().is_some_and(|c| c == '$') {
+            return None;
+        }
+
+        let mut it = self.chars_indices.clone();
+        it.next();
+        let mut str_len: usize = 0;
+        if let Some((start, _)) = it.peek().cloned() {
+            while it
+                .next_if(|(_, c)| c.is_alphanumeric() || *c == '_')
+                .is_some()
+            {
+                str_len += 1;
+            }
+            let tok = Token::new(
+                TokenKind::Variable(&self.code[start..(start + str_len)]),
+                self.row,
+                self.column,
+            );
+            self.advance_by(str_len + 1);
+            return Some(tok);
+        }
+
+        None
+    }
+
     pub fn tokenize_string(&mut self) -> Option<Token<'a>> {
         if !self.peek_char().is_some_and(|c| c == '"') {
             return None;
@@ -428,6 +455,7 @@ impl<'a> Lexer<'a> {
                 .or_else(|| self.tokenize_operator())
                 .or_else(|| self.tokenize_keyword())
                 .or_else(|| self.tokenize_function_name())
+                .or_else(|| self.tokenize_variable_name())
                 .or_else(|| self.tokenize_id())
                 .or_else(|| self.tokenize_string())
                 .ok_or(ParsingError::new_with_message(
@@ -609,6 +637,18 @@ mod tests {
         assert!(matches!(
             res.first().unwrap().get_kind(),
             TokenKind::Keyword(KeywordKind::Function)
+        ));
+        Ok(())
+    }
+
+	 #[test]
+    fn test_variable() -> Result<(), Box<dyn Error>> {
+        let mut lexer = Lexer::new("$ef");
+        lexer.tokenize()?;
+        let res = lexer.get_tokens();
+        assert!(matches!(
+            res.first().unwrap().get_kind(),
+            TokenKind::Variable("ef")
         ));
         Ok(())
     }
