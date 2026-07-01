@@ -5,36 +5,36 @@ use crate::{
     state::{ExecutionError, State},
 };
 
-#[derive(Debug, Clone)]
-pub enum ActionKind<'a> {
+#[derive(Debug)]
+pub enum ActionKind {
     /// Final unit of code that represents a constant string
     ConstString(String),
     /// A function that will generate an html tag without any children
     Function {
-        tag_name: &'a str,
-        arguments: HashMap<&'a str, ActionKind<'a>>,
-        body: Option<Box<ActionKind<'a>>>,
+        tag_name: String,
+        arguments: HashMap<String, ActionKind>,
+        body: Option<Box<ActionKind>>,
     },
     /// Function which has a body that can contain multiple children such as div
-    Sequence(Vec<ActionKind<'a>>),
-    GetVariable(&'a str),
+    Sequence(Vec<ActionKind>),
+    GetVariable(String),
     BinaryOperation {
         op: OperatorKind,
-        left: Box<ActionKind<'a>>,
-        right: Box<ActionKind<'a>>,
+        left: Box<ActionKind>,
+        right: Box<ActionKind>,
     },
     UserFunctionCall {
-        function_name: &'a str,
-        arguments: HashMap<&'a str, ActionKind<'a>>,
+        function_name: String,
+        arguments: HashMap<String, ActionKind>,
     },
     UserFunctionDeclaration {
-        function_name: &'a str,
-        arguments: Vec<&'a str>,
-        body: Rc<Box<ActionKind<'a>>>,
+        function_name: String,
+        arguments: Vec<String>,
+        body: Rc<ActionKind>,
     },
 }
 
-impl<'a> Display for ActionKind<'a> {
+impl<'a> Display for ActionKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             ActionKind::ConstString(s) => write!(f, "CONST({s})"),
@@ -102,8 +102,8 @@ impl<'a> Display for ActionKind<'a> {
     }
 }
 
-impl<'a> ActionKind<'a> {
-    pub fn generate(&self, state: &mut State<'a>) -> Result<Option<String>, ExecutionError> {
+impl<'a> ActionKind {
+    pub fn generate(&self, state: &mut State) -> Result<Option<String>, ExecutionError> {
         match &self {
             ActionKind::ConstString(s) => Ok(Some(s.to_string())),
             ActionKind::Function {
@@ -147,22 +147,22 @@ impl<'a> ActionKind<'a> {
                 function_name,
                 arguments,
             } => {
-                let mut args: HashMap<&str, String> = HashMap::new();
+                let mut args: HashMap<String, String> = HashMap::new();
                 for (arg_name, arg_val) in arguments {
                     args.insert(
-                        *arg_name,
+                        arg_name.to_string(),
                         arg_val.generate(state)?.unwrap_or_else(|| String::new()),
                     );
                 }
 
-                state.execute_user_function(*function_name, args)
+                state.execute_user_function(function_name, args)
             }
             ActionKind::UserFunctionDeclaration {
                 function_name,
                 arguments,
                 body,
             } => {
-                state.add_user_function(*function_name, arguments.clone(), body.clone());
+                state.add_user_function(function_name.clone(), arguments.clone(), body.clone());
                 Ok(None)
             }
             ActionKind::GetVariable(name) => Ok(state.get_variable_value(name)),
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn test_tag_generation() {
         let act = ActionKind::Function {
-            tag_name: "div",
+            tag_name: "div".to_owned(),
             arguments: HashMap::new(),
             body: None,
         };
@@ -204,10 +204,10 @@ mod tests {
 
     #[test]
     fn test_tag_generation_with_arguments() {
-        let mut args: HashMap<&str, ActionKind> = HashMap::new();
-        args.insert("class", ActionKind::ConstString("amazing".to_owned()));
+        let mut args: HashMap<String, ActionKind> = HashMap::new();
+        args.insert("class".to_owned(), ActionKind::ConstString("amazing".to_owned()));
         let act = ActionKind::Function {
-            tag_name: "div",
+            tag_name: "div".to_owned(),
             arguments: args,
             body: None,
         };

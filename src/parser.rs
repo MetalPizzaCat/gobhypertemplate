@@ -12,7 +12,7 @@ use crate::{
 pub struct Parser<'a> {
     input: &'a [Token<'a>],
     tokens: core::iter::Peekable<core::slice::Iter<'a, Token<'a>>>,
-    program: Option<ActionKind<'a>>,
+    program: Option<ActionKind>,
 
     last_row: usize,
     last_column: usize,
@@ -98,7 +98,7 @@ macro_rules! get_token_value_of_kind {
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(input: &'a [Token<'a>]) -> Self {
+    pub fn new(input: &'a [Token]) -> Self {
         Parser {
             input,
             tokens: input.iter().peekable(),
@@ -108,10 +108,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn try_get_as_token_id(&mut self) -> Option<&'a str> {
+    pub fn try_get_as_token_id(&mut self) -> Option<String> {
         if let Some(tok) = self.tokens.peek() {
             match tok.get_kind() {
-                TokenKind::Identifier(s) => Some(s),
+                TokenKind::Identifier(s) => Some(s.to_string()),
                 _ => None,
             }
         } else {
@@ -119,7 +119,7 @@ impl<'a> Parser<'a> {
         }
     }
     /// Advance the token iterator and record the debug position info
-    pub fn next(&mut self) -> Option<&Token<'a>> {
+    pub fn next(&mut self) -> Option<&Token> {
         if let Some(curr) = self.tokens.peek() {
             self.last_row = curr.get_row();
             self.last_column = curr.get_column();
@@ -145,16 +145,16 @@ impl<'a> Parser<'a> {
 
     /// Attempt to parse unit of the language
     /// Unit represents the smallest expression possible, such as function call or constant string
-    pub fn parse_unit(&mut self) -> Result<Option<ActionKind<'a>>, ParsingError> {
+    pub fn parse_unit(&mut self) -> Result<Option<ActionKind>, ParsingError> {
         if let Some(tok) = self.tokens.peek() {
-            let act: Option<ActionKind<'_>> = match tok.get_kind() {
+            let act: Option<ActionKind> = match tok.get_kind() {
                 // any identifier will be considered a function call
                 // this way any operation like variable operations could be done as separate functions
                 TokenKind::Identifier(_) => Some(self.parse_call()?),
 
                 TokenKind::Variable(name) => {
                     self.next();
-                    Some(ActionKind::GetVariable(name))
+                    Some(ActionKind::GetVariable(name.to_string()))
                 }
                 TokenKind::StringConst(s) => {
                     self.next();
@@ -177,7 +177,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_argument(&mut self) -> Result<Option<(&'a str, ActionKind<'a>)>, ParsingError> {
+    pub fn parse_argument(&mut self) -> Result<Option<(String, ActionKind)>, ParsingError> {
         if let Some(arg_name) = self.try_get_as_token_id() {
             self.next();
             consume_token!(
@@ -201,8 +201,8 @@ impl<'a> Parser<'a> {
     pub fn parse_binary_right_side(
         &mut self,
         priority: i32,
-        left: ActionKind<'a>,
-    ) -> Result<Option<ActionKind<'a>>, ParsingError> {
+        left: ActionKind,
+    ) -> Result<Option<ActionKind>, ParsingError> {
         let mut left = left;
         loop {
             let tok_priority: i32 = self.get_binary_operation_priority();
@@ -247,7 +247,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_expression(&mut self) -> Result<Option<ActionKind<'a>>, ParsingError> {
+    pub fn parse_expression(&mut self) -> Result<Option<ActionKind>, ParsingError> {
         let left = self.parse_unit()?;
         if let Some(left) = left {
             return self.parse_binary_right_side(0, left);
@@ -256,7 +256,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_user_function_call(&mut self) -> Result<Option<ActionKind<'a>>, ParsingError> {
+    pub fn parse_user_function_call(&mut self) -> Result<Option<ActionKind>, ParsingError> {
         if !is_current_of_kind!(self, TokenKind::Function(_)) {
             return Ok(None);
         }
@@ -272,7 +272,7 @@ impl<'a> Parser<'a> {
             "Expected '('".to_owned()
         )?;
 
-        let mut arguments: HashMap<&'a str, ActionKind<'a>> = HashMap::new();
+        let mut arguments: HashMap<String, ActionKind> = HashMap::new();
         while let Some((arg, act)) = self.parse_argument()? {
             arguments.insert(arg, act);
             if !is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::Comma)) {
@@ -287,12 +287,12 @@ impl<'a> Parser<'a> {
         )?;
 
         Ok(Some(ActionKind::UserFunctionCall {
-            function_name: name,
+            function_name: name.to_string(),
             arguments,
         }))
     }
 
-    pub fn parse_function_definition(&mut self) -> Result<Option<ActionKind<'a>>, ParsingError> {
+    pub fn parse_function_definition(&mut self) -> Result<Option<ActionKind>, ParsingError> {
         if !is_current_of_kind!(self, TokenKind::Keyword(KeywordKind::Function)) {
             return Ok(None);
         }
@@ -309,13 +309,13 @@ impl<'a> Parser<'a> {
             TokenKind::Separator(SeparatorKind::BracketOpen),
             "Expected '(' for argument declaration".to_owned()
         )?;
-        let mut args: Vec<&str> = Vec::new();
+        let mut args: Vec<String> = Vec::new();
         while is_current_of_kind!(self, TokenKind::Identifier(_)) {
             args.push(get_token_value_of_kind!(
                 self,
                 TokenKind::Identifier,
                 "Expected argument name".to_owned()
-            )?);
+            )?.to_string());
             self.next();
             if !is_current_of_kind!(self, TokenKind::Separator(Comma)) {
                 break;
@@ -338,14 +338,14 @@ impl<'a> Parser<'a> {
             "Expected '}'".to_owned()
         )?;
         Ok(Some(ActionKind::UserFunctionDeclaration {
-            function_name: name,
+            function_name: name.to_string(),
             arguments: args,
-            body: Rc::new(Box::new(body)),
+            body: Rc::new(body),
         }))
     }
 
     /// Parse unit of logic that can be executed within a body, such as variable assignment or function declaration
-    pub fn parse_sequence_unit(&mut self) -> Result<Option<ActionKind<'a>>, ParsingError> {
+    pub fn parse_sequence_unit(&mut self) -> Result<Option<ActionKind>, ParsingError> {
         if let Some(act) = self.parse_expression()? {
             Ok(Some(act))
         } else if let Some(act_def) = self.parse_function_definition()? {
@@ -355,7 +355,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_body(&mut self) -> Result<ActionKind<'a>, ParsingError> {
+    pub fn parse_body(&mut self) -> Result<ActionKind, ParsingError> {
         let mut sequence: Vec<ActionKind> = Vec::new();
         while let Some(act) = self.parse_sequence_unit()? {
             // let s = if let Some(t) = self.tokens.peek() {
@@ -381,7 +381,7 @@ impl<'a> Parser<'a> {
         Ok(ActionKind::Sequence(sequence))
     }
 
-    pub fn parse_call(&mut self) -> Result<ActionKind<'a>, ParsingError> {
+    pub fn parse_call(&mut self) -> Result<ActionKind, ParsingError> {
         let id = get_token_value_of_kind!(
             self,
             TokenKind::Identifier,
@@ -393,7 +393,7 @@ impl<'a> Parser<'a> {
             TokenKind::Separator(SeparatorKind::BracketOpen),
             "Expected '('".to_owned()
         )?;
-        let mut arguments: HashMap<&'a str, ActionKind<'a>> = HashMap::new();
+        let mut arguments: HashMap<String, ActionKind> = HashMap::new();
         while let Some((arg, act)) = self.parse_argument()? {
             arguments.insert(arg, act);
             if !is_current_of_kind!(self, TokenKind::Separator(SeparatorKind::Comma)) {
@@ -421,7 +421,7 @@ impl<'a> Parser<'a> {
         )?;
 
         Ok(ActionKind::Function {
-            tag_name: id,
+            tag_name: id.to_string(),
             arguments: arguments,
             body: Some(Box::new(body)),
         })
