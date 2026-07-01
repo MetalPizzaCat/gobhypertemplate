@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fmt::Display, rc::Rc};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fmt::{Display, write},
+    rc::Rc,
+};
 
 use crate::{
     lexer::OperatorKind,
@@ -32,6 +37,7 @@ pub enum ActionKind {
         arguments: Vec<String>,
         body: Rc<ActionKind>,
     },
+    Import(Box<ActionKind>),
 }
 
 impl<'a> Display for ActionKind {
@@ -98,12 +104,13 @@ impl<'a> Display for ActionKind {
                 arguments.join(","),
                 body.to_string()
             ),
+            ActionKind::Import(path) => write!(f, "IMPORT({})", path.to_string()),
         }
     }
 }
 
 impl<'a> ActionKind {
-    pub fn generate(&self, state: &mut State) -> Result<Option<String>, ExecutionError> {
+    pub fn generate(&self, state: &mut State) -> Result<Option<String>, Box<dyn Error>> {
         match &self {
             ActionKind::ConstString(s) => Ok(Some(s.to_string())),
             ActionKind::Function {
@@ -155,7 +162,7 @@ impl<'a> ActionKind {
                     );
                 }
 
-                state.execute_user_function(function_name, args)
+                Ok(state.execute_user_function(function_name, args)?)
             }
             ActionKind::UserFunctionDeclaration {
                 function_name,
@@ -166,7 +173,15 @@ impl<'a> ActionKind {
                 Ok(None)
             }
             ActionKind::GetVariable(name) => Ok(state.get_variable_value(name)),
-          
+            ActionKind::Import(path) => {
+                if let Some(p) = path.generate(state)? {
+                    Ok(state.execute_module_from_file(&p)?)
+                } else {
+                    Err(Box::new(ExecutionError::new(
+                        crate::state::ExecutionErrorKind::InvalidModulePath,
+                    )))
+                }
+            }
         }
     }
 }
@@ -205,7 +220,10 @@ mod tests {
     #[test]
     fn test_tag_generation_with_arguments() {
         let mut args: HashMap<String, ActionKind> = HashMap::new();
-        args.insert("class".to_owned(), ActionKind::ConstString("amazing".to_owned()));
+        args.insert(
+            "class".to_owned(),
+            ActionKind::ConstString("amazing".to_owned()),
+        );
         let act = ActionKind::Function {
             tag_name: "div".to_owned(),
             arguments: args,

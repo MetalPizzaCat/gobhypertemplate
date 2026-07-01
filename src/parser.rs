@@ -161,6 +161,7 @@ impl<'a> Parser<'a> {
                     Some(ActionKind::ConstString(s))
                 }
                 TokenKind::Function(_) => self.parse_user_function_call()?,
+                TokenKind::Keyword(KeywordKind::Import) => self.parse_import()?,
                 _ => None,
             };
             // if act.is_some() {
@@ -256,6 +257,32 @@ impl<'a> Parser<'a> {
         }
     }
 
+    pub fn parse_import(&mut self) -> Result<Option<ActionKind>, ParsingError> {
+        if !is_current_of_kind!(self, TokenKind::Keyword(KeywordKind::Import)) {
+            return Ok(None);
+        }
+        self.next();
+        consume_token!(
+            self,
+            TokenKind::Separator(SeparatorKind::BracketOpen),
+            "Expected '('".to_owned()
+        )?;
+        let path = self.parse_expression()?.ok_or_else(|| {
+            ParsingError::new_with_message(
+                crate::lexer::ParsingErrorKind::UnexpectedCharacter,
+                "Expected import path expression".to_owned(),
+                self.last_row,
+                self.last_column,
+            )
+        })?;
+        consume_token!(
+            self,
+            TokenKind::Separator(SeparatorKind::BracketClose),
+            "Expected ')' to close user function call arguments".to_owned()
+        )?;
+        Ok(Some(ActionKind::Import(Box::new(path))))
+    }
+
     pub fn parse_user_function_call(&mut self) -> Result<Option<ActionKind>, ParsingError> {
         if !is_current_of_kind!(self, TokenKind::Function(_)) {
             return Ok(None);
@@ -311,11 +338,14 @@ impl<'a> Parser<'a> {
         )?;
         let mut args: Vec<String> = Vec::new();
         while is_current_of_kind!(self, TokenKind::Identifier(_)) {
-            args.push(get_token_value_of_kind!(
-                self,
-                TokenKind::Identifier,
-                "Expected argument name".to_owned()
-            )?.to_string());
+            args.push(
+                get_token_value_of_kind!(
+                    self,
+                    TokenKind::Identifier,
+                    "Expected argument name".to_owned()
+                )?
+                .to_string(),
+            );
             self.next();
             if !is_current_of_kind!(self, TokenKind::Separator(Comma)) {
                 break;

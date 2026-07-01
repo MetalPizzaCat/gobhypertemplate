@@ -63,6 +63,7 @@ pub enum KeywordKind {
     If,
     Else,
     Elif,
+    Import,
 }
 
 impl KeywordKind {
@@ -73,6 +74,7 @@ impl KeywordKind {
             "if" => Some(Self::If),
             "else" => Some(Self::Else),
             "elif" => Some(Self::Elif),
+            "!import" => Some(Self::Import),
             _ => None,
         }
     }
@@ -288,14 +290,20 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn tokenize_keyword(&mut self) -> Option<Token<'a>> {
-        if !self.peek_char().is_some_and(char::is_alphabetic) {
+        if !self
+            .peek_char()
+            .is_some_and(|c| c.is_alphabetic() || c == '!')
+        {
             return None;
         }
         let mut it = self.chars_indices.clone();
 
         let mut str_len: usize = 0;
         if let Some((start, _)) = it.peek().cloned() {
-            while it.next_if(|(_, ch)| ch.is_alphabetic()).is_some() {
+            while it
+                .next_if(|(_, ch)| ch.is_alphabetic() || *ch == '!')
+                .is_some()
+            {
                 str_len += 1;
             }
             let keyword_str = &self.code[start..(start + str_len)];
@@ -526,6 +534,17 @@ mod tests {
     }
 
     #[test]
+    fn test_import() {
+        let code = "!import";
+        let mut lexer = Lexer::new(code);
+        let res = lexer.tokenize_keyword();
+        assert!(matches!(
+            res.unwrap().kind,
+            TokenKind::Keyword(KeywordKind::Import)
+        ));
+    }
+
+    #[test]
     fn test_id() {
         let code = "var1";
         let mut lexer = Lexer::new(code);
@@ -641,7 +660,7 @@ mod tests {
         Ok(())
     }
 
-	 #[test]
+    #[test]
     fn test_variable() -> Result<(), Box<dyn Error>> {
         let mut lexer = Lexer::new("$ef");
         lexer.tokenize()?;

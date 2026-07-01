@@ -12,6 +12,7 @@ use std::error::Error;
 pub enum ExecutionErrorKind {
     UnknownFunction,
     UnknownVariable,
+    InvalidModulePath,
 }
 
 #[derive(Debug)]
@@ -41,7 +42,9 @@ pub struct UserFunction {
 }
 
 pub struct Module {
-    body: ActionKind,
+    /// cached in result of executing the module code
+    body: Option<String>,
+    /// functions loaded by the module
     functions: HashMap<String, UserFunction>,
 }
 
@@ -49,6 +52,7 @@ pub struct Module {
 pub struct State {
     variables: Vec<HashMap<String, String>>,
     functions: HashMap<String, UserFunction>,
+    modules: HashMap<String, Option<String>>,
 }
 
 impl State {
@@ -73,7 +77,7 @@ impl State {
         &mut self,
         body: &ActionKind,
         args: HashMap<String, String>,
-    ) -> Result<Option<String>, ExecutionError> {
+    ) -> Result<Option<String>, Box<dyn Error>> {
         self.create_new_variable_scope(args);
         let res = body.generate(self);
         self.pop_variable_scope();
@@ -84,14 +88,16 @@ impl State {
         &mut self,
         name: &str,
         args: HashMap<String, String>,
-    ) -> Result<Option<String>, ExecutionError> {
+    ) -> Result<Option<String>, Box<dyn Error>> {
         if let Some(f) = self.get_user_function(name).cloned() {
             self.create_new_variable_scope(args);
             let res = f.body.generate(self);
             self.pop_variable_scope();
             res
         } else {
-            Err(ExecutionError::new(ExecutionErrorKind::UnknownFunction))
+            Err(Box::new(ExecutionError::new(
+                ExecutionErrorKind::UnknownFunction,
+            )))
         }
     }
 
@@ -117,9 +123,31 @@ impl State {
         parser.parse_body()
     }
 
+    pub fn execute_module(&mut self, code: &str) -> Result<Option<String>, Box<dyn Error>> {
+        let mut lexer: Lexer = Lexer::new(code);
+        lexer.tokenize()?;
+        let tokens: Vec<crate::lexer::Token> = lexer.get_tokens();
+        let mut parser = Parser::new(&tokens);
+        Ok(parser.parse_body()?.generate(self)?)
+    }
+
     pub fn load_module_from_file(&mut self, path: &str) -> Result<ActionKind, Box<dyn Error>> {
         let code = std::fs::read_to_string(path)?;
         Ok(self.load_module(code.as_ref())?)
+    }
+
+    /// Attempt to load module by given path. If module was previously loaded a cached in result is returned, otherwise module is executed
+    pub fn execute_module_from_file(
+        &mut self,
+        path: &str,
+    ) -> Result<Option<String>, Box<dyn Error>> {
+        if let Some(module) = self.modules.get(path) {
+            return Ok(module.clone());
+        }
+        let code = std::fs::read_to_string(path)?;
+        let cache = self.load_module(code.as_ref())?.generate(self)?;
+        self.modules.insert(path.to_owned(), cache);
+        Ok(self.modules.get(path).unwrap().clone())
     }
 
     pub fn get_user_function(&self, name: &str) -> Option<&UserFunction> {

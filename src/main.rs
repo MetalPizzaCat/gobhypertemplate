@@ -1,25 +1,85 @@
 pub mod action;
 pub mod lexer;
+pub mod module;
 pub mod parser;
 pub mod state;
-pub mod module;
 
-fn main() {
-    /*
-    Body{
-        Text(class =  "bla"){ "some value or rather" .. $variable .. "adad" }
-    }
-
-
-     */
-    println!("Hello, world!");
-}
+fn main() {}
 
 #[cfg(test)]
 mod tests {
     use std::error::Error;
 
     use crate::{lexer::Lexer, parser::Parser, state::State};
+
+    struct TestFolders {}
+    impl TestFolders {
+        pub fn new() -> Result<Self, Box<dyn Error>> {
+            std::fs::create_dir("./tmp")?;
+            Ok(Self {})
+        }
+    }
+
+    impl Drop for TestFolders {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all("./tmp").unwrap();
+        }
+    }
+
+    #[test]
+    fn test_import() -> Result<(), Box<dyn Error>> {
+        let test_folders = TestFolders::new()?;
+        std::fs::write("./tmp/import.gi", "p(){\"Hello world\";};")?;
+
+        let mut lexer = Lexer::new("p(class = \"bla\"){!import(\"./tmp/import.gi\");};");
+        lexer.tokenize()?;
+        let tokens = lexer.get_tokens();
+        let mut parser = Parser::new(&tokens);
+        let mut state = State::default();
+        assert_eq!(
+            parser.parse_body()?.generate(&mut state)?.unwrap(),
+            "<p class=\"bla\"><p >Hello world</p></p>".to_owned()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_import_multiple() -> Result<(), Box<dyn Error>> {
+        let test_folders = TestFolders::new()?;
+        std::fs::write("./tmp/import.gi", "p(){\"Hello world\";};")?;
+
+        let mut lexer = Lexer::new(
+            "p(class = \"bla\"){!import(\"./tmp/import.gi\");!import(\"./tmp/import.gi\");};",
+        );
+        lexer.tokenize()?;
+        let tokens = lexer.get_tokens();
+        let mut parser = Parser::new(&tokens);
+        let mut state = State::default();
+        assert_eq!(
+            parser.parse_body()?.generate(&mut state)?.unwrap(),
+            "<p class=\"bla\"><p >Hello world</p><p >Hello world</p></p>".to_owned()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_import_func() -> Result<(), Box<dyn Error>> {
+        let test_folders = TestFolders::new()?;
+        std::fs::write("./tmp/import.gi", "p(){\"Hello world\";}; def bla(){\"secret\";};")?;
+
+        let mut lexer = Lexer::new(
+            "p(class = \"bla\"){!import(\"./tmp/import.gi\");%bla();!import(\"./tmp/import.gi\");};",
+        );
+        lexer.tokenize()?;
+        let tokens = lexer.get_tokens();
+        let mut parser = Parser::new(&tokens);
+        let mut state = State::default();
+        assert_eq!(
+            parser.parse_body()?.generate(&mut state)?.unwrap(),
+            "<p class=\"bla\"><p >Hello world</p>secret<p >Hello world</p></p>".to_owned()
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_full_gen_simple() -> Result<(), Box<dyn Error>> {
@@ -201,23 +261,23 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
-    // fn test_full_user_function_decl_with_arg() -> Result<(), Box<dyn Error>> {
-    //     let mut lexer = Lexer::new(r#"def bla(a){ $a;}"#);
-    //     lexer.tokenize()?;
-    //     let tokens = lexer.get_tokens();
-    //     let mut parser = Parser::new(&tokens);
-    //     let mut state = State::default();
-    //     assert!(
-    //         parser
-    //             .parse_function_definition()?
-    //             .unwrap()
-    //             .generate(&mut state)?
-    //             .is_none()
-    //     );
+    #[test]
+    fn test_full_user_function_decl_with_arg() -> Result<(), Box<dyn Error>> {
+        let mut lexer = Lexer::new(r#"def bla(a){ $a;}"#);
+        lexer.tokenize()?;
+        let tokens = lexer.get_tokens();
+        let mut parser = Parser::new(&tokens);
+        let mut state = State::default();
+        assert!(
+            parser
+                .parse_function_definition()?
+                .unwrap()
+                .generate(&mut state)?
+                .is_none()
+        );
 
-    // 	assert!(state.get_user_function("bla").is_some());
+        assert!(state.get_user_function("bla").is_some());
 
-    //     Ok(())
-    // }
+        Ok(())
+    }
 }
